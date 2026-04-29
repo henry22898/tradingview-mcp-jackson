@@ -2,8 +2,48 @@
  * Core health/discovery/launch logic.
  */
 import { getClient, getTargetInfo, evaluate } from '../connection.js';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { execSync, spawn } from 'child_process';
+
+/**
+ * Resolve a TradingView UWP/MSIX install on Windows.
+ * The Microsoft Store version installs to:
+ *   C:\Program Files\WindowsApps\TradingView.Desktop_<version>_x64__<hash>\TradingView.exe
+ * That directory is non-listable by non-admin users, but specific file paths
+ * are readable, and Get-AppxPackage exposes the location without admin.
+ */
+function resolveTradingViewUwp() {
+  if (process.platform !== 'win32') return null;
+
+  // Strategy 1: env override (advanced users who relocated the install or want pinning)
+  if (process.env.TRADINGVIEW_EXE && existsSync(process.env.TRADINGVIEW_EXE)) {
+    return process.env.TRADINGVIEW_EXE;
+  }
+
+  // Strategy 2: ask AppX directly (no admin needed)
+  try {
+    const ps = `Get-AppxPackage -Name TradingView.Desktop | Select-Object -First 1 -ExpandProperty InstallLocation`;
+    const out = execSync(`powershell -NoProfile -NonInteractive -Command "${ps}"`, { timeout: 6000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    if (out) {
+      const exe = `${out}\\TradingView.exe`;
+      if (existsSync(exe)) return exe;
+    }
+  } catch { /* PowerShell unavailable or not installed */ }
+
+  // Strategy 3: glob WindowsApps for a versioned dir (works only if user can list it; usually they can't)
+  try {
+    const wa = `${process.env.PROGRAMFILES}\\WindowsApps`;
+    if (existsSync(wa)) {
+      const dirs = readdirSync(wa).filter(n => /^TradingView\.Desktop_/i.test(n));
+      for (const d of dirs) {
+        const exe = `${wa}\\${d}\\TradingView.exe`;
+        if (existsSync(exe)) return exe;
+      }
+    }
+  } catch { /* no read access; ignore */ }
+
+  return null;
+}
 
 export async function healthCheck() {
   await getClient();
@@ -173,6 +213,7 @@ export async function launch({ port, kill_existing } = {}) {
       `${process.env.LOCALAPPDATA}\\TradingView\\TradingView.exe`,
       `${process.env.PROGRAMFILES}\\TradingView\\TradingView.exe`,
       `${process.env['PROGRAMFILES(X86)']}\\TradingView\\TradingView.exe`,
+      // UWP/MSIX installs (Microsoft Store version) — resolved via AppX query below.
     ],
     linux: [
       '/opt/TradingView/tradingview',
@@ -197,6 +238,11 @@ export async function launch({ port, kill_existing } = {}) {
     } catch { /* ignore */ }
   }
 
+  // Windows: try UWP/MSIX install (Microsoft Store version) before giving up
+  if (!tvPath && platform === 'win32') {
+    tvPath = resolveTradingViewUwp();
+  }
+
   if (!tvPath && platform === 'darwin') {
     try {
       const found = execSync('mdfind "kMDItemFSName == TradingView.app" | head -1', { timeout: 5000 }).toString().trim();
@@ -208,7 +254,10 @@ export async function launch({ port, kill_existing } = {}) {
   }
 
   if (!tvPath) {
-    throw new Error(`TradingView not found on ${platform}. Searched: ${candidates.join(', ')}. Launch manually with: /path/to/TradingView --remote-debugging-port=${cdpPort}`);
+    const winHint = platform === 'win32'
+      ? ` Microsoft Store / UWP installs are auto-detected via Get-AppxPackage; if you have one and it still fails, set the TRADINGVIEW_EXE env var to the absolute path of TradingView.exe.`
+      : '';
+    throw new Error(`TradingView not found on ${platform}. Searched: ${candidates.join(', ')}.${winHint} Launch manually with: /path/to/TradingView --remote-debugging-port=${cdpPort}`);
   }
 
   if (killFirst) {
