@@ -15,11 +15,12 @@ import { registerUiTools } from "./tools/ui.js";
 import { registerPaneTools } from "./tools/pane.js";
 import { registerTabTools } from "./tools/tab.js";
 import { registerMorningTools } from "./tools/morning.js";
+import { registerScreenerTools } from "./tools/screener.js";
 
 const server = new McpServer(
   {
     name: "tradingview",
-    version: "2.0.0",
+    version: "2.1.0-screener",
     description:
       "AI-assisted TradingView chart analysis and Pine Script development via Chrome DevTools Protocol",
   },
@@ -62,6 +63,18 @@ Launch: tv_launch → auto-detect and start TradingView with CDP on any platform
 Panes: pane_list, pane_set_layout (s, 2h, 2v, 4, 6, 8), pane_focus, pane_set_symbol
 Tabs: tab_list, tab_new, tab_close, tab_switch
 
+Screener (filter the universe of symbols, then act on results):
+- screener_open → open the Screener bottom panel (optionally with market: stock/crypto/forex/cfd/coin)
+- screener_set_market → switch market tab inside an open Screener
+- screener_get_state → current market, preset, columns, applied filters, total result count
+- screener_list_presets / screener_load_preset → reuse user-saved filter sets (most reliable filter path)
+- screener_apply_filter → programmatic filter (column + operator + value) — partial; prefer presets
+- screener_clear_filters → reset all filters
+- screener_sort → sort by any column header
+- screener_get_results → read the table (limit/offset/columns whitelist; max 200 rows/call)
+- screener_export_to_watchlist → push top-N results into the active watchlist so chart_/data_/batch_ tools can act on them
+- screener_inspect → diagnostic DOM dump for fixing selectors when TradingView ships UI changes
+
 CONTEXT MANAGEMENT:
 - ALWAYS use summary=true on data_get_ohlcv
 - ALWAYS use study_filter on pine tools when you know which indicator you want
@@ -87,6 +100,7 @@ registerUiTools(server);
 registerPaneTools(server);
 registerTabTools(server);
 registerMorningTools(server);
+registerScreenerTools(server);
 
 // Startup notice (stderr so it doesn't interfere with MCP stdio protocol)
 process.stderr.write(
